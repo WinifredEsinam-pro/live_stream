@@ -22,26 +22,27 @@ client_socket = None
 running       = False
 server_ip     = "127.0.0.1"
 
-view_mode = "IDLE"  
+view_mode = "IDLE"
 
-own_stream_id    = None  
+own_stream_id    = None
 is_broadcasting  = False
 own_cam          = None
 upload_socket    = None
 own_preview_buf  = None
 own_preview_lock = threading.Lock()
 
-cseq          = 0     
-pending_step  = None 
+cseq          = 0
+pending_step  = None
 
 watching_id          = None
-remote_streams        = {}   
+auto_watch           = True   
+remote_streams        = {}
 remote_streams_lock   = threading.Lock()
 
 #GUI
 root = tk.Tk()
 root.title("Live Stream Client")
-root.geometry("520x560")
+root.geometry("520x640")
 root.configure(bg="#1e1e2e")
 
 BG     = "#1e1e2e"
@@ -104,6 +105,21 @@ def refresh_watch_dropdown():
         watch_dropdown.config(state='disabled')
     update_buttons()
 
+def maybe_auto_watch():
+    global view_mode, watching_id
+    if not auto_watch:
+        return
+    with remote_streams_lock:
+        ids = sorted(remote_streams.keys())
+    if ids:
+        watching_id = ids[0]
+        view_mode = "WATCH"
+        watch_var.set(watching_id)
+    else:
+        watching_id = None
+        view_mode = "IDLE"
+    update_buttons()
+
 #go live
 def toggle_own_live():
     global cseq, pending_step
@@ -123,7 +139,7 @@ def send_play():
     send_cmd(build_rtsp_request("PLAY", cseq, session=own_stream_id))
 
 def begin_own_live():
-    global is_broadcasting, own_cam, upload_socket, view_mode
+    global is_broadcasting, own_cam, upload_socket
     if not own_stream_id:
         return
     own_cam = cv2.VideoCapture(0)
@@ -143,7 +159,6 @@ def begin_own_live():
         return
 
     is_broadcasting = True
-    view_mode = "OWN"
     log("You are live.")
     update_buttons()
     threading.Thread(target=camera_loop, daemon=True).start()
@@ -170,10 +185,8 @@ def camera_loop():
     except Exception: pass
 
 def stop_own_live():
-    global is_broadcasting, view_mode, own_preview_buf, own_stream_id, cseq, pending_step
+    global is_broadcasting, own_preview_buf, own_stream_id, cseq, pending_step
     is_broadcasting = False
-    if view_mode == "OWN":
-        view_mode = "IDLE"
     own_preview_buf = None
     cseq += 1
     pending_step = "TEARDOWN"
@@ -185,7 +198,7 @@ def stop_own_live():
 
 #watch
 def watch_selected():
-    global view_mode, watching_id
+    global view_mode, watching_id, auto_watch
     sid = watch_var.get()
     if not sid or sid == "(nobody live)":
         return
@@ -195,13 +208,15 @@ def watch_selected():
             return
     watching_id = sid
     view_mode = "WATCH"
+    auto_watch = False  
     update_buttons()
 
 def stop_watching():
-    global view_mode, watching_id
+    global view_mode, watching_id, auto_watch
     watching_id = None
-    if view_mode == "WATCH":
-        view_mode = "IDLE"
+    view_mode = "IDLE"
+    auto_watch = True   
+    maybe_auto_watch()
     update_buttons()
 
 #incoming messages
@@ -217,6 +232,7 @@ def handle_text(text):
         if is_new:
             log(f"{sid} went live.")
         root.after(0, refresh_watch_dropdown)
+        root.after(0, maybe_auto_watch)
         return
 
     if text.startswith("ENDED:"):
@@ -225,10 +241,10 @@ def handle_text(text):
             remote_streams.pop(sid, None)
         if watching_id == sid:
             watching_id = None
-            if view_mode == "WATCH":
-                view_mode = "IDLE"
+            view_mode = "IDLE"
             log(f"{sid} ended their stream.")
         root.after(0, refresh_watch_dropdown)
+        root.after(0, maybe_auto_watch)
         return
 
     status, headers = parse_rtsp_message(text)
@@ -284,34 +300,49 @@ def receive_loop():
                 root.after(0, update_buttons)
             break
 
-#display
-def draw_placeholder(msg):
-    canvas.delete("all")
-    w = canvas.winfo_width()  or 480
-    h = canvas.winfo_height() or 300
-    canvas.create_text(w // 2, h // 2, text=msg, fill="gray")
+def draw_placeholder(target_canvas, msg):
+    target_canvas.delete("all")
+    w = target_canvas.winfo_width()  or 480
+    h = target_canvas.winfo_height() or 220
+    target_canvas.create_text(w // 2, h // 2, text=msg, fill="gray")
 
-def draw_frame(frame):
-    w = canvas.winfo_width()  or 480
-    h = canvas.winfo_height() or 300
-    img = Image.fromarray(frame).resize((w, h), Image.LANCZOS)
+
+def draw_frame(target_canvas, frame):
+    box_w = target_canvas.winfo_width()  or 480
+    box_h = target_canvas.winfo_height() or 220
+    frame_h, frame_w = frame.shape[:2]
+    if frame_w <= 0 or frame_h <= 0 or box_w <= 0 or box_h <= 0:
+        return
+    scale = min(box_w / frame_w, box_h / frame_h)
+    new_w = max(1, int(frame_w * scale))
+    new_h = max(1, int(frame_h * scale))
+    x = (box_w - new_w) // 2
+    y = (box_h - new_h) // 2
+ 
+    img = Image.fromarray(frame).resize((new_w, new_h), Image.LANCZOS)
     photo = ImageTk.PhotoImage(img)
-    canvas.photo = photo
-    canvas.delete("all")
-    canvas.create_image(0, 0, anchor='nw', image=photo)
+    target_canvas.photo = photo
+    target_canvas.delete("all")
+    target_canvas.create_rectangle(0, 0, box_w, box_h, fill="#0d0d14", outline="")
+    target_canvas.create_image(x, y, anchor='nw', image=photo)
 
-def update_display():
-    if view_mode == "OWN":
+def update_own_canvas():
+    if is_broadcasting:
         with own_preview_lock:
             frame = own_preview_buf
-        draw_frame(frame) if frame is not None else draw_placeholder("starting camera...")
-    elif view_mode == "WATCH":
+        draw_frame(own_canvas, frame) if frame is not None else draw_placeholder(own_canvas, "starting camera...")
+    else:
+        draw_placeholder(own_canvas, "Go Live to show your camera")
+    root.after(30, update_own_canvas)
+
+def update_remote_canvas():
+    if view_mode == "WATCH" and watching_id is not None:
         with remote_streams_lock:
             frame = remote_streams.get(watching_id)
-        draw_frame(frame) if frame is not None else draw_placeholder(f"waiting for {watching_id}...")
+        draw_frame(canvas, frame) if frame is not None else draw_placeholder(canvas, f"waiting for {watching_id}...")
     else:
-        draw_placeholder("Connected." if running else "Enter server IP and click Connect")
-    root.after(30, update_display)
+        draw_placeholder(canvas, "Connected." if running else "Enter server IP and click Connect")
+    root.after(30, update_remote_canvas)
 
 #connect
 def connect():
@@ -352,8 +383,13 @@ connect_btn = tk.Button(conn_row, text="Connect", font=FONT, bg=ACCENT, fg="#1e1
     relief='flat', cursor='hand2', padx=12, pady=4, command=connect)
 connect_btn.pack(side='left', padx=4)
 
-canvas = tk.Canvas(root, width=480, height=280, bg="#0d0d14", highlightthickness=0)
-canvas.pack(padx=14, pady=8)
+tk.Label(root, text="Remote", font=FONT, bg=BG, fg=MUTED).pack(anchor='w', padx=14, pady=(2, 0))
+canvas = tk.Canvas(root, width=480, height=220, bg="#0d0d14", highlightthickness=0)
+canvas.pack(padx=14, pady=(2, 6))
+
+tk.Label(root, text="You", font=FONT, bg=BG, fg=MUTED).pack(anchor='w', padx=14)
+own_canvas = tk.Canvas(root, width=480, height=140, bg="#0d0d14", highlightthickness=0)
+own_canvas.pack(padx=14, pady=(2, 8))
 
 live_row = tk.Frame(root, bg=BG)
 live_row.pack(pady=4)
@@ -377,11 +413,13 @@ stop_watch_btn = tk.Button(live_row, text="Stop Watching", font=FONT, bg="#3a3a4
     relief='flat', cursor='hand2', padx=12, pady=5, state='disabled', command=stop_watching)
 stop_watch_btn.pack(side='left', padx=4)
 
-log_box = scrolledtext.ScrolledText(root, height=8, width=58, font=FONT_MONO,
+log_box = scrolledtext.ScrolledText(root, height=7, width=58, font=FONT_MONO,
     bg=BOX_BG, fg=FG, relief='flat', insertbackground=FG)
 log_box.pack(padx=14, pady=(4, 14), fill='both', expand=True)
 
-draw_placeholder("Enter server IP and click Connect")
+draw_placeholder(canvas, "Enter server IP and click Connect")
+draw_placeholder(own_canvas, "Go Live to show your camera")
 log("Ready.")
-update_display()
+update_own_canvas()
+update_remote_canvas()
 root.mainloop()
