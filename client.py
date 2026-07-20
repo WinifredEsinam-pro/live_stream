@@ -44,6 +44,9 @@ root = tk.Tk()
 root.title("Live Stream Client")
 root.geometry("520x640")
 root.configure(bg="#1e1e2e")
+root.update_idletasks()
+root.maxsize(root.winfo_screenwidth(), root.winfo_screenheight())
+root.minsize(420, 480)
 
 BG     = "#1e1e2e"
 FG     = "#e6e6e6"
@@ -215,8 +218,7 @@ def stop_watching():
     global view_mode, watching_id, auto_watch
     watching_id = None
     view_mode = "IDLE"
-    auto_watch = True   
-    maybe_auto_watch()
+    auto_watch = True
     update_buttons()
 
 #incoming messages
@@ -306,7 +308,6 @@ def draw_placeholder(target_canvas, msg):
     h = target_canvas.winfo_height() or 220
     target_canvas.create_text(w // 2, h // 2, text=msg, fill="gray")
 
-
 def draw_frame(target_canvas, frame):
     box_w = target_canvas.winfo_width()  or 480
     box_h = target_canvas.winfo_height() or 220
@@ -318,7 +319,7 @@ def draw_frame(target_canvas, frame):
     new_h = max(1, int(frame_h * scale))
     x = (box_w - new_w) // 2
     y = (box_h - new_h) // 2
- 
+
     img = Image.fromarray(frame).resize((new_w, new_h), Image.LANCZOS)
     photo = ImageTk.PhotoImage(img)
     target_canvas.photo = photo
@@ -383,16 +384,12 @@ connect_btn = tk.Button(conn_row, text="Connect", font=FONT, bg=ACCENT, fg="#1e1
     relief='flat', cursor='hand2', padx=12, pady=4, command=connect)
 connect_btn.pack(side='left', padx=4)
 
-tk.Label(root, text="Remote", font=FONT, bg=BG, fg=MUTED).pack(anchor='w', padx=14, pady=(2, 0))
-canvas = tk.Canvas(root, width=480, height=220, bg="#0d0d14", highlightthickness=0)
-canvas.pack(padx=14, pady=(2, 6))
-
-tk.Label(root, text="You", font=FONT, bg=BG, fg=MUTED).pack(anchor='w', padx=14)
-own_canvas = tk.Canvas(root, width=480, height=140, bg="#0d0d14", highlightthickness=0)
-own_canvas.pack(padx=14, pady=(2, 8))
+log_box = scrolledtext.ScrolledText(root, height=7, width=58, font=FONT_MONO,
+    bg=BOX_BG, fg=FG, relief='flat', insertbackground=FG)
+log_box.pack(side='bottom', padx=14, pady=(4, 14), fill='both', expand=True)
 
 live_row = tk.Frame(root, bg=BG)
-live_row.pack(pady=4)
+live_row.pack(side='bottom', pady=4)
 live_btn = tk.Button(live_row, text="Go Live", font=FONT, bg="#3a3a4a", fg=FG,
     relief='flat', cursor='hand2', padx=12, pady=5, state='disabled', command=toggle_own_live)
 live_btn.pack(side='left', padx=4)
@@ -413,9 +410,21 @@ stop_watch_btn = tk.Button(live_row, text="Stop Watching", font=FONT, bg="#3a3a4
     relief='flat', cursor='hand2', padx=12, pady=5, state='disabled', command=stop_watching)
 stop_watch_btn.pack(side='left', padx=4)
 
-log_box = scrolledtext.ScrolledText(root, height=7, width=58, font=FONT_MONO,
-    bg=BOX_BG, fg=FG, relief='flat', insertbackground=FG)
-log_box.pack(padx=14, pady=(4, 14), fill='both', expand=True)
+video_frame = tk.Frame(root, bg=BG)
+video_frame.pack(padx=14, pady=(2, 8), fill='both', expand=True)
+video_frame.columnconfigure(0, weight=1)
+video_frame.rowconfigure(1, weight=1)   # remote canvas row
+video_frame.rowconfigure(3, weight=1)   # own canvas row — same weight = same size
+
+tk.Label(video_frame, text="Remote", font=FONT, bg=BG, fg=MUTED).grid(
+    row=0, column=0, sticky='w')
+canvas = tk.Canvas(video_frame, bg="#0d0d14", highlightthickness=0)
+canvas.grid(row=1, column=0, sticky='nsew', pady=(0, 6))
+
+tk.Label(video_frame, text="You", font=FONT, bg=BG, fg=MUTED).grid(
+    row=2, column=0, sticky='w')
+own_canvas = tk.Canvas(video_frame, bg="#0d0d14", highlightthickness=0)
+own_canvas.grid(row=3, column=0, sticky='nsew')
 
 draw_placeholder(canvas, "Enter server IP and click Connect")
 draw_placeholder(own_canvas, "Go Live to show your camera")
