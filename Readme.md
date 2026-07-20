@@ -2,7 +2,7 @@ Live-only video streaming: any client can go live, any client can watch.
 
 protocol.py
 server.py
--client.py
+client.py
 
 (keep all three in the same folder)
 
